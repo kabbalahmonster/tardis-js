@@ -1,0 +1,15 @@
+{
+    "name": "tardis-snapshot",
+    "version": "2.0.0",
+    "description": "TARDIS - Tree And Repo Dump In Single-file. Pack a whole project into one pasteable document and apply AI replies back.",
+    "license": "MIT",
+    "bin": { "tardis": "tardis.js" },
+    "main": "lib/core.js",
+    "scripts": {
+      "start": "node tardis.js",
+      "test": "node --test test/"
+    },
+    "engines": { "node": ">=18" },
+    "files": ["tardis.js", "lib/", "ui/", "README.md"],
+    "optionalDependencies": {}
+  }

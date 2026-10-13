@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TARDIS — Tree And Repo Dump In Single-file</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- Header: brand + the two workflow tabs ---------------------------------->
+<header class="brand">
+  <div class="brand-left">
+    <span class="logo">TARDIS</span>
+    <span class="sub">Tree And Repo Dump In Single-file<br><em>"It's bigger on the inside."</em></span>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="pack" role="tab">1 · Pack a project</button>
+    <button class="tab" data-tab="apply" role="tab">2 · Apply the AI's reply</button>
+  </nav>
+  <div class="brand-right"><span class="sign">POLICE PUBLIC CALL BOX</span></div>
+</header>
+
+<!-- Tab 1: pack ---------------------------------------------------------->
+<main id="tab-pack" class="panel active">
+  <section class="toprow">
+    <label class="grow">Project folder or Git URL
+      <div class="inline">
+        <input id="source" list="recent-list" placeholder="/path/to/project  or  github.com/user/repo" autocomplete="off">
+        <datalist id="recent-list"></datalist>
+        <button id="browse" title="Pick a folder">Browse…</button>
+        <button id="rescan" title="Alt+R">Rescan</button>
+      </div>
+    </label>
+    <label>Profile
+      <div class="inline">
+        <select id="profile"><option value="">(last session)</option></select>
+        <button id="profile-save" title="Save settings + ticks as a named profile">Save…</button>
+        <button id="profile-delete">Delete</button>
+      </div>
+    </label>
+    <label class="check"><input type="checkbox" id="watch"> Auto-rescan when files change</label>
+  </section>
+
+  <section class="columns">
+    <!-- Left: settings, read top to bottom -->
+    <aside class="controls">
+      <details open><summary>1 · What to pack</summary>
+        <select id="time">
+          <option value="now">The project as it is now</option>
+          <option value="since">Only what changed since…</option>
+          <option value="at">The project as it was at…</option>
+        </select>
+        <div class="inline"><input id="ref" list="ref-list" placeholder="branch, tag or commit" disabled><datalist id="ref-list"></datalist>
+          <label class="check small"><input type="checkbox" id="include_diff" checked disabled> + diff</label></div>
+        <div class="grid2">
+          <label class="check"><input type="checkbox" id="include_hidden"> Hidden files</label>
+          <label class="check"><input type="checkbox" id="use_ignore" checked> .gitignore rules</label>
+          <label class="check"><input type="checkbox" id="include_locks"> Lock/minified</label>
+          <label class="check"><input type="checkbox" id="include_secrets"> Secret-looking files</label>
+        </div>
+        <label class="inline">Condense/skip files over <input id="max_size_kb" type="number" min="1" value="256" class="num"> KB</label>
+        <label>Exclude <input id="exclude_globs" placeholder="tests/, *.md"></label>
+        <label>Only <input id="include_globs" placeholder="src/, *.py"></label>
+        <p class="hint">gitignore-style globs, comma separated. Enter applies.</p>
+      </details>
+      <details open><summary>2 · Size (token budget)</summary>
+        <label>Budget <input id="budget" list="budget-list" value="No limit">
+          <datalist id="budget-list"><option>No limit</option><option>8k</option><option>16k</option><option>32k</option><option>64k</option><option>100k</option><option>128k</option><option>200k</option><option>500k</option><option>1M</option></datalist></label>
+        <div class="inline">
+          <label class="check"><input type="radio" name="over" value="trim" checked> Trim to fit</label>
+          <label class="check"><input type="radio" name="over" value="split"> Split into parts</label>
+        </div>
+      </details>
+      <details open><summary>3 · Output</summary>
+        <label>Format <select id="fmt"><option value="markdown">Markdown</option><option value="xml">XML tags</option><option value="text">Plain text</option></select></label>
+        <div class="grid2">
+          <label class="check"><input type="checkbox" id="redact" checked> Redact secrets</label>
+          <label class="check"><input type="checkbox" id="line_numbers"> Line numbers</label>
+          <label class="check"><input type="checkbox" id="tree_only"> Map only</label>
+        </div>
+      </details>
+      <details open><summary>4 · Task for the AI (optional)</summary>
+        <select id="template"><option value="">(no task – just the snapshot)</option></select>
+        <textarea id="task" rows="4" placeholder="What should the AI do with this?"></textarea>
+        <div class="inline between">
+          <label class="check"><input type="checkbox" id="reply_format" checked> Ask for replies TARDIS can apply</label>
+          <button id="template-save" class="small">Save task…</button>
+        </div>
+      </details>
+    </aside>
+
+    <!-- Middle: the file tree -->
+    <section class="tree-pane">
+      <div class="tree-tools">
+        <input id="find" placeholder="Find in tree…">
+        <button id="sort" title="Sort by size">Tokens ↓</button>
+        <button id="expand-all">Expand</button><button id="collapse-all">Collapse</button>
+        <button id="check-all">All</button><button id="check-none">None</button>
+      </div>
+      <div id="tree" class="tree" role="tree" tabindex="0"></div>
+      <p class="hint">Tick = include · right-click for condensed, focus and imports · orange = trimmed by the budget</p>
+    </section>
+
+    <!-- Right: preview -->
+    <section class="preview-pane">
+      <div class="preview-tools">
+        <span>Preview — exactly what gets copied</span>
+        <select id="part" class="hidden"></select>
+      </div>
+      <pre id="preview" class="preview"></pre>
+    </section>
+  </section>
+
+  <footer class="bottombar">
+    <div class="meter"><div id="meter-fill"></div></div>
+    <span id="stats"></span>
+    <div id="langs" class="langs"></div>
+    <span class="spacer"></span>
+    <button id="download">Download</button>
+    <button id="copy" class="primary">Copy to clipboard (Allons-y!)</button>
+  </footer>
+</main>
+
+<!-- Tab 2: apply --------------------------------------------------------->
+<main id="tab-apply" class="panel">
+  <section class="toprow">
+    <label class="grow">Apply to folder <div class="inline"><input id="apply-to" placeholder="/path/to/project"><button id="apply-browse">Browse…</button></div></label>
+  </section>
+  <section class="columns apply-columns">
+    <section class="reply-pane">
+      <div class="inline between"><strong>1 · Paste the AI's reply (or open a snapshot)</strong>
+        <span><button id="reply-paste">Paste from clipboard</button> <button id="reply-clear">Clear</button></span></div>
+      <textarea id="reply" placeholder="Ctrl+V the reply here. TARDIS looks for '### FILE: path' + code blocks, EDIT blocks and DELETE lines — and the usual informal styles."></textarea>
+      <div class="inline between"><strong>2 · Review what would change (tick = apply)</strong><span id="apply-summary" class="hint"></span></div>
+      <div id="changes" class="changes"></div>
+    </section>
+    <section class="diff-pane">
+      <strong>3 · Diff preview</strong>
+      <pre id="diff" class="diff"></pre>
+    </section>
+  </section>
+  <footer class="bottombar">
+    <button id="undo">Undo last apply</button>
+    <span class="spacer"></span>
+    <button id="apply-run" class="primary">Apply changes</button>
+  </footer>
+</main>
+
+<!-- Folder picker (modal) ------------------------------------------------->
+<dialog id="picker">
+  <form method="dialog">
+    <h3>Choose a folder</h3>
+    <div class="inline"><input id="picker-path"><button type="button" id="picker-go">Go</button></div>
+    <div id="picker-crumbs" class="crumbs"></div>
+    <ul id="picker-list" class="picker-list"></ul>
+    <div class="inline between"><button type="button" id="picker-home">Home</button>
+      <span><button value="cancel">Cancel</button> <button id="picker-use" value="use" class="primary">Use this folder</button></span></div>
+  </form>
+</dialog>
+
+<!-- Context menu + toasts ------------------------------------------------->
+<ul id="ctx" class="ctx hidden">
+  <li data-act="full">Full contents</li>
+  <li data-act="condensed">Condensed (outline / sample)</li>
+  <li data-act="off">Leave out</li>
+  <li data-act="auto">Automatic (let TARDIS decide)</li>
+  <li class="sep"></li>
+  <li data-act="focus">Focus: only this + everything it imports</li>
+  <li data-act="add">Add everything this imports</li>
+  <li data-act="importers">Add the files that import this</li>
+</ul>
+<div id="toasts" class="toasts"></div>
+<div id="status" class="status">Pick a project folder (or paste a GitHub URL) to begin. Allons-y!</div>
+<script src="app.js"></script>
+</body>
+</html>

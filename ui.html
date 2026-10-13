@@ -1,0 +1,1041 @@
+<!doctype html>
+<!--
+  TARDIS 3 - the GUI.
+
+  A single static page served by tardis.js. It holds no project data itself: every
+  action calls the local JSON API (POST /api/<name>) and re-renders from the answer.
+
+  Layout of this file:
+    <style>   theme variables (light/dark), layout, components
+    <body>    header, two tabs (Pack / Apply), folder-picker dialog, context menu, toasts
+    <script>  1 plumbing  2 state  3 options  4 scan/build  5 tree  6 preview
+              7 copy/save  8 profiles/templates  9 folder picker  10 apply tab  11 wiring
+-->
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TARDIS</title>
+<style>
+  /* ---------- theme: every colour is a variable, so dark mode is one block ---------- */
+  :root {
+    --blue: #003b6f; --blue2: #1565c0; --bg: #f4f6f9; --panel: #ffffff; --ink: #1b2733;
+    --muted: #6b7480; --line: #d9dee5; --hover: #eef3f9; --sel: #dcebfb; --warn: #b45309;
+    --bad: #b00020; --good: #0b6b2b; --add: #e6f4ea; --del: #fce8e6; --heat: 255, 138, 60;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  [data-theme="dark"] {
+    --bg: #0f1720; --panel: #17212c; --ink: #e3e9f0; --muted: #93a0ae; --line: #2a3746;
+    --hover: #1e2b39; --sel: #1d3a5c; --warn: #f0a04b; --bad: #ff7a8a; --good: #6fd08c;
+    --add: #12351f; --del: #4a1c1c; --blue2: #5aa2f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    [data-theme="auto"] {
+      --bg: #0f1720; --panel: #17212c; --ink: #e3e9f0; --muted: #93a0ae; --line: #2a3746;
+      --hover: #1e2b39; --sel: #1d3a5c; --warn: #f0a04b; --bad: #ff7a8a; --good: #6fd08c;
+      --add: #12351f; --del: #4a1c1c; --blue2: #5aa2f0;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink);
+         background: var(--bg); display: flex; flex-direction: column; overflow: hidden; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--blue2); border-color: var(--blue2); color: #fff; font-weight: 600; padding: 7px 16px; }
+  button.primary:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], input[type=number], select, textarea {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--blue2); outline-offset: -1px; }
+  input.invalid { border-color: var(--bad); }
+  label { cursor: pointer; user-select: none; }
+  .muted { color: var(--muted); }
+  .grow { flex: 1 1 auto; min-width: 0; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  [hidden] { display: none !important; }
+
+  /* ---------- header and tabs ---------- */
+  header { background: var(--blue); color: #fff; padding: 8px 16px; display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: 1px; }
+  header .tag { color: #cfe3f7; font-size: 12px; line-height: 1.3; }
+  header .sign { background: #0b0b0b; font-weight: 700; font-size: 10px; letter-spacing: 1px; padding: 4px 10px; border-radius: 2px; }
+  header button { background: transparent; border-color: #ffffff55; color: #fff; }
+  header button:hover { background: #ffffff22; }
+  nav { display: flex; gap: 4px; padding: 8px 12px 0; }
+  nav button { border-radius: 8px 8px 0 0; border-bottom: none; padding: 8px 16px; color: var(--muted); }
+  nav button.on { background: var(--panel); color: var(--ink); font-weight: 600; }
+  main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--panel);
+         margin: 0 12px; border: 1px solid var(--line); border-radius: 0 8px 8px 8px; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .cols { flex: 1 1 auto; min-height: 0; display: flex; }
+
+  /* ---------- settings column ---------- */
+  #settings { width: 300px; flex: none; overflow-y: auto; padding: 8px 10px; border-right: 1px solid var(--line); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 10px; padding: 6px 10px 10px; }
+  legend { font-weight: 600; padding: 0 6px; }
+  legend b { display: inline-block; background: var(--blue2); color: #fff; border-radius: 50%; width: 18px; height: 18px;
+             text-align: center; line-height: 18px; font-size: 11px; margin-right: 4px; }
+  fieldset .row { margin-top: 6px; flex-wrap: wrap; }
+  fieldset .row > input[type=text], fieldset .row > select { flex: 1 1 120px; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  textarea#task { width: 100%; height: 74px; resize: vertical; margin-top: 6px; }
+
+  /* ---------- tree ---------- */
+  #treePane { width: 46%; min-width: 280px; display: flex; flex-direction: column; }
+  #tokenMap { display: flex; height: 10px; margin: 0 10px 6px; border-radius: 5px; overflow: hidden; background: var(--line); }
+  #tokenMap span { min-width: 2px; cursor: pointer; border-right: 1px solid var(--panel); }
+  #treeHead, .trow { display: grid; grid-template-columns: 1fr 74px 96px 150px; align-items: center; }
+  #treeHead { padding: 4px 10px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 12px; }
+  #treeHead span { cursor: pointer; } #treeHead .r { text-align: right; padding-right: 10px; }
+  #tree { flex: 1 1 auto; overflow: auto; padding: 2px 0 8px; }
+  .trow { padding: 1px 10px; cursor: default; white-space: nowrap; }
+  .trow:hover { background: var(--hover); } .trow.sel { background: var(--sel); }
+  .trow .name { display: flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; }
+  .trow .name i { width: 12px; flex: none; font-style: normal; color: var(--muted); cursor: pointer; text-align: center; }
+  .trow .tok { text-align: right; padding-right: 10px; font-variant-numeric: tabular-nums; }
+  .trow .share { height: 12px; position: relative; font-size: 10px; color: var(--muted); }
+  .trow .share u { position: absolute; left: 0; top: 2px; bottom: 2px; background: rgba(var(--heat), .75); border-radius: 2px; }
+  .trow .share em { position: absolute; right: 4px; top: -2px; font-style: normal; }
+  .trow .info { color: var(--muted); overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .trow.off .name span, .trow.off .tok { color: var(--muted); }
+  .trow.budget .info { color: var(--warn); font-weight: 600; }
+  .trow.dir .name span { font-weight: 600; }
+  /* the tick box: one element, five looks */
+  .box { width: 14px; height: 14px; flex: none; border: 1.5px solid var(--muted); border-radius: 3px; cursor: pointer;
+         display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; color: #fff; }
+  .box.on { background: var(--blue2); border-color: var(--blue2); } .box.on::after { content: "\2713"; }
+  .box.cond { border-color: var(--blue2); color: var(--blue2); } .box.cond::after { content: "\2261"; font-weight: 700; }
+  .box.part { border-color: var(--blue2); } .box.part::after { content: ""; width: 7px; height: 7px; background: var(--blue2); border-radius: 1px; }
+  .box.na { background: var(--line); border-color: var(--line); cursor: default; }
+
+  /* ---------- preview ---------- */
+  #split { width: 5px; flex: none; cursor: col-resize; background: var(--line); }
+  #split:hover { background: var(--blue2); }
+  #previewPane { flex: 1 1 0; min-width: 200px; display: flex; flex-direction: column; }
+  .scroll { flex: 1 1 auto; overflow: auto; position: relative; }
+  pre { margin: 0; padding: 10px 12px; font: 12px/18px var(--mono); white-space: pre; tab-size: 4; }
+  #hit { position: absolute; left: 0; right: 0; height: 18px; background: #ffd54a55; pointer-events: none; }
+  #welcome { padding: 40px; text-align: center; }
+  #welcome h2 { font-size: 20px; margin: 0 0 6px; } #welcome .recent { margin-top: 18px; text-align: left; display: inline-block; }
+  #welcome .recent a { display: block; padding: 3px 0; color: var(--blue2); cursor: pointer; text-decoration: none; }
+
+  /* ---------- bottom bars ---------- */
+  .actions { border-top: 1px solid var(--line); border-bottom: none; }
+  #meter { width: 160px; height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; flex: none; }
+  #meter div { height: 100%; width: 0; background: var(--blue2); transition: width .25s; }
+  #meter.over div { background: var(--bad); }
+  #status { padding: 6px 16px 8px; min-height: 30px; display: flex; align-items: center; gap: 8px; }
+  #status.error { color: var(--bad); }
+  .spin { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--blue2); border-radius: 50%;
+          animation: spin .7s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- apply tab ---------- */
+  #applyLeft { width: 44%; min-width: 320px; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  #reply { flex: 1 1 40%; margin: 0 10px; resize: none; font: 12px/1.5 var(--mono); }
+  #changes { flex: 1 1 60%; overflow: auto; margin-top: 4px; }
+  .crow { display: grid; grid-template-columns: 22px 1fr 84px 70px; gap: 6px; padding: 4px 10px; align-items: center; cursor: default; }
+  .crow:hover { background: var(--hover); } .crow.sel { background: var(--sel); }
+  .crow .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crow .note { grid-column: 2 / 5; font-size: 12px; color: var(--bad); white-space: normal; }
+  .crow.dim { color: var(--muted); }
+  .st-new { color: var(--good); font-weight: 600; } .st-delete, .st-problem { color: var(--bad); font-weight: 600; }
+  #diff span { display: block; padding: 0 12px; min-height: 18px; }
+  #diff .a { background: var(--add); } #diff .d { background: var(--del); } #diff .h { color: var(--blue2); } #diff .n { color: var(--bad); font-weight: 600; white-space: pre-wrap; }
+  h3 { margin: 0; font-size: 13px; }
+
+  /* ---------- dialog, menu, toasts ---------- */
+  #modal { position: fixed; inset: 0; background: #0008; display: flex; align-items: center; justify-content: center; z-index: 20; }
+  #modal .card { background: var(--panel); border-radius: 10px; width: min(640px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+                 box-shadow: 0 20px 60px #0006; }
+  #modal .list { overflow: auto; flex: 1 1 auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); min-height: 200px; }
+  #modal .item { padding: 6px 14px; cursor: pointer; display: flex; gap: 8px; } #modal .item:hover { background: var(--hover); }
+  .badge { font-size: 10px; background: var(--blue2); color: #fff; border-radius: 8px; padding: 1px 7px; align-self: center; }
+  #menu { position: fixed; z-index: 30; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px;
+          box-shadow: 0 8px 30px #0004; min-width: 260px; }
+  #menu div { padding: 6px 10px; border-radius: 5px; cursor: pointer; } #menu div:hover { background: var(--hover); }
+  #menu hr { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
+  #toasts { position: fixed; right: 16px; bottom: 44px; display: flex; flex-direction: column; gap: 8px; z-index: 40; }
+  .toast { background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 8px; max-width: 420px; box-shadow: 0 6px 20px #0005;
+           animation: rise .18s ease-out; }
+  .toast.error { background: var(--bad); color: #fff; }
+  @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TARDIS</h1>
+  <div class="tag">Tree And Repo Dump In Single-file<br>"It's bigger on the inside."</div>
+  <div class="grow"></div>
+  <label class="row" title="Rescan automatically when files in the project change"><input type="checkbox" id="live"> Live</label>
+  <button id="theme" title="Switch between light, dark and automatic">Theme: auto</button>
+  <div class="sign">POLICE &nbsp;PUBLIC CALL&nbsp; BOX</div>
+</header>
+
+<nav>
+  <button data-tab="pack" class="on">1 &middot; Pack a project <span class="muted">(outbound)</span></button>
+  <button data-tab="apply">2 &middot; Apply the AI's reply <span class="muted">(return trip)</span></button>
+</nav>
+
+<!-- ================================ TAB 1: PACK ================================ -->
+<main id="tab-pack">
+  <div class="bar">
+    <b>Project</b>
+    <input type="text" id="source" class="grow" list="recents" placeholder="Folder path or Git URL (github.com/user/repo) - Enter to open" spellcheck="false">
+    <datalist id="recents"></datalist>
+    <button id="browse">Browse&hellip;</button>
+    <button id="rescan" title="Re-read the project">Rescan</button>
+    <span class="muted">Profile</span>
+    <select id="profile"><option value="">(last session)</option></select>
+    <button id="profileSave">Save&hellip;</button>
+    <button id="profileDelete">Delete</button>
+  </div>
+
+  <div class="cols">
+    <aside id="settings">
+      <fieldset>
+        <legend><b>1</b>What to pack</legend>
+        <div class="row">
+          <select id="timeMode" class="grow" title="Git time travel">
+            <option value="now">The project as it is now</option>
+            <option value="since">Only what changed since&hellip;</option>
+            <option value="at">The project as it was at&hellip;</option>
+          </select>
+        </div>
+        <div class="row" id="refRow" hidden>
+          <input type="text" id="ref" list="refs" placeholder="branch, tag or commit" spellcheck="false">
+          <datalist id="refs"></datalist>
+          <label id="diffLabel"><input type="checkbox" id="o_diff" data-opt checked> diff</label>
+        </div>
+        <div class="row">
+          <label title="Dotfiles and dot-folders"><input type="checkbox" id="o_hidden" data-opt data-scan> Hidden files</label>
+          <label title="Respect .gitignore and skip junk folders"><input type="checkbox" id="o_ignore" data-opt data-scan checked> .gitignore rules</label>
+        </div>
+        <div class="row">
+          <label title="package-lock.json, *.min.js ..."><input type="checkbox" id="o_locks" data-opt data-scan> Lock / minified</label>
+          <label title=".env, *.pem ..."><input type="checkbox" id="o_secrets" data-opt data-scan> Secret-looking files</label>
+        </div>
+        <div class="row">Condense or skip files over
+          <input type="number" id="o_max" data-opt data-scan value="256" min="1" style="width:70px"> KB</div>
+        <div class="row"><span style="width:52px">Exclude</span><input type="text" id="o_exclude" data-opt data-scan placeholder="tests/, *.md" spellcheck="false"></div>
+        <div class="row"><span style="width:52px">Only</span><input type="text" id="o_only" data-opt data-scan placeholder="src/, *.py" spellcheck="false"></div>
+        <div class="hint">Comma-separated patterns, .gitignore syntax.</div>
+      </fieldset>
+      <fieldset>
+        <legend><b>2</b>Size (token budget)</legend>
+        <div class="row">Budget
+          <input type="text" id="o_budget" data-opt list="budgets" value="No limit" style="flex:0 0 100px">
+          <datalist id="budgets"><option>No limit</option><option>8k</option><option>16k</option><option>32k</option><option>64k</option>
+            <option>100k</option><option>128k</option><option>200k</option><option>500k</option><option>1M</option></datalist>
+          <span class="muted">tokens</span></div>
+        <div class="row">If over:
+          <label><input type="radio" name="over" value="trim" data-opt checked> Trim to fit</label>
+          <label><input type="radio" name="over" value="split" data-opt> Split into parts</label></div>
+      </fieldset>
+      <fieldset>
+        <legend><b>3</b>Output</legend>
+        <div class="row">Format
+          <select id="o_fmt" data-opt><option value="markdown">Markdown</option><option value="xml">XML tags</option><option value="text">Plain text</option></select>
+          <label title="Replace secret-looking values with placeholders"><input type="checkbox" id="o_redact" data-opt checked> Redact secrets</label></div>
+        <div class="row">
+          <label><input type="checkbox" id="o_numbers" data-opt> Line numbers</label>
+          <label><input type="checkbox" id="o_tree" data-opt> Map only</label></div>
+      </fieldset>
+      <fieldset>
+        <legend><b>4</b>Task for the AI <span class="muted">(optional)</span></legend>
+        <div class="row"><select id="template" class="grow"></select><button id="templateSave" title="Save the text below as a template">Save&hellip;</button></div>
+        <textarea id="task" placeholder="What should the AI do with the project? Placed after the snapshot."></textarea>
+        <div class="row"><label title="Adds short instructions so the answer can be applied in tab 2">
+          <input type="checkbox" id="o_reply" data-opt checked> Ask for replies TARDIS can apply</label></div>
+      </fieldset>
+    </aside>
+
+    <section id="treePane">
+      <div class="bar" style="border-bottom:none">
+        <input type="text" id="find" class="grow" placeholder="Find files&hellip;  (press / )" spellcheck="false">
+        <button data-act="all" title="Tick everything that is included by default">All</button>
+        <button data-act="none">None</button>
+        <button data-act="expand">Expand</button>
+        <button data-act="collapse">Collapse</button>
+      </div>
+      <div id="tokenMap" title="Where the tokens are: one segment per top-level folder. Click to filter."></div>
+      <div id="treeHead"><span data-sort="name">File <span class="muted">(tick = include; right-click for more)</span></span>
+        <span class="r" data-sort="tokens">Tokens</span><span data-sort="tokens">Share</span><span>Info</span></div>
+      <div id="tree"></div>
+    </section>
+
+    <div id="split" title="Drag to resize"></div>
+
+    <section id="previewPane">
+      <div class="bar" style="border-bottom:none">
+        <b>Preview</b><span class="muted">exactly what gets copied</span><div class="grow"></div>
+        <select id="part" hidden></select>
+      </div>
+      <div class="scroll" id="previewScroll">
+        <div id="hit" hidden></div>
+        <pre id="preview"></pre>
+        <div id="welcome">
+          <h2>Pick a project to begin. Allons-y!</h2>
+          <div class="muted">Choose a folder, or paste a GitHub address into the box above.</div>
+          <p><button class="primary" id="welcomeBrowse">Choose a project folder&hellip;</button></p>
+          <div class="recent" id="welcomeRecent"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="bar actions">
+    <div id="meter"><div></div></div>
+    <span id="stats" class="grow muted"></span>
+    <button id="save">Download&hellip;</button>
+    <button id="copy" class="primary" title="Ctrl/Cmd + Enter">Copy to clipboard</button>
+  </div>
+</main>
+
+<!-- ================================ TAB 2: APPLY =============================== -->
+<main id="tab-apply" hidden>
+  <div class="bar">
+    <b>Apply to folder</b>
+    <input type="text" id="applyTo" class="grow" spellcheck="false" placeholder="The project folder (an empty folder rebuilds a project from a snapshot)">
+    <button id="applyBrowse">Browse&hellip;</button>
+  </div>
+  <div class="cols">
+    <section id="applyLeft">
+      <div class="bar" style="border-bottom:none"><h3 class="grow">1 &middot; Paste the AI's reply</h3>
+        <button id="paste">Paste from clipboard</button><button id="clear">Clear</button></div>
+      <textarea id="reply" spellcheck="false" placeholder="Paste the whole reply here (Ctrl/Cmd + V). TARDIS finds the files in it."></textarea>
+      <div class="bar" style="border-bottom:none"><h3 class="grow">2 &middot; Review what would change</h3><span id="applySummary" class="muted"></span></div>
+      <div id="changes"></div>
+    </section>
+    <section class="grow" style="display:flex;flex-direction:column">
+      <div class="bar" style="border-bottom:none"><h3>3 &middot; Diff preview</h3><span class="muted">green = added, red = removed</span></div>
+      <div class="scroll"><pre id="diff"></pre></div>
+    </section>
+  </div>
+  <div class="bar actions">
+    <button id="undo">Undo last apply</button>
+    <button id="fixup" hidden title="Copies a follow-up message asking the AI to resend the files that could not be applied">Copy fix-up request</button>
+    <div class="grow"></div>
+    <button id="apply" class="primary" disabled>Apply changes</button>
+  </div>
+</main>
+
+<div id="status"><span id="statusText">Pick a project folder to begin.</span></div>
+
+<!-- folder picker -->
+<div id="modal" hidden>
+  <div class="card">
+    <div class="bar"><b class="grow">Choose a folder</b><button id="pickClose">Cancel</button></div>
+    <div class="bar"><button id="pickUp" title="Parent folder">&uarr; Up</button><button id="pickHome">Home</button>
+      <input type="text" id="pickPath" class="grow" spellcheck="false"></div>
+    <div class="list" id="pickList"></div>
+    <div class="bar" style="border:none"><span id="pickInfo" class="muted grow"></span><button class="primary" id="pickChoose">Use this folder</button></div>
+  </div>
+</div>
+<div id="menu" hidden></div>
+<div id="toasts"></div>
+
+<script>window.BOOT = __TARDIS_BOOT__;</script>
+<script>
+'use strict';
+/* =====================================================================================
+ * 1. Plumbing
+ * ===================================================================================== */
+const BOOT = window.BOOT;
+/** Shorthand for querySelector. */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+/** Escapes text for insertion into HTML. */
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = (n) => Number(n).toLocaleString('en-US');
+const plural = (n, w) => `${fmt(n)} ${w}${n === 1 ? '' : 's'}`;
+
+/** Calls the local API. Rejects with the server's friendly error message. */
+async function api(name, body = {}) {
+  let res;
+  try {
+    res = await fetch('/api/' + name, { method: 'POST', body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json', 'x-tardis-token': BOOT.token } });
+  } catch { throw new Error('TARDIS is no longer running. Start it again with: node tardis.js'); }
+  const data = await res.json().catch(() => ({ ok: false, error: 'Unexpected answer from TARDIS.' }));
+  if (!data.ok) throw new Error(data.error || 'Something went wrong.');
+  return data;
+}
+
+/** Small pop-up message, bottom right. */
+function toast(msg, kind = '') {
+  const t = document.createElement('div');
+  t.className = 'toast ' + kind;
+  t.textContent = msg;
+  $('#toasts').append(t);
+  setTimeout(() => t.remove(), kind === 'error' ? 7000 : 3500);
+}
+/** The status line at the bottom of the window. */
+function status(msg, error = false) {
+  $('#statusText').textContent = msg;
+  $('#status').classList.toggle('error', error);
+}
+function setBusy(on, msg) {
+  let s = $('#status .spin');
+  if (on && !s) { s = document.createElement('div'); s.className = 'spin'; $('#status').prepend(s); }
+  if (!on && s) s.remove();
+  if (msg) status(msg);
+}
+/** Runs `fn` once, `ms` after the last call with the same key. */
+const timers = {};
+function debounce(key, ms, fn) { clearTimeout(timers[key]); timers[key] = setTimeout(fn, ms); }
+
+/** Clipboard write with a fallback for browsers that refuse the modern API. */
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.append(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+/* =====================================================================================
+ * 2. State (the single source of truth for the page)
+ * ===================================================================================== */
+const state = {
+  source: '',          // what is in the Project box (path or URL) for the open project
+  project: null,       // answer of /api/scan (name, root, git, refs, ...)
+  entries: [],         // [{rel, skip, note, forceable, def, change, lines, ...}]
+  sel: {},             // explicit per-file choices: rel -> 'full' | 'condensed' | 'off'
+  doc: null,           // answer of /api/build (parts, rows, tokens, ...)
+  part: 0,             // which part the preview shows / the Copy button copies next
+  open: new Set(),     // expanded folders (relative paths)
+  find: '', sort: 'name', picked: '',
+  planned: [], ticks: {}, fixup: '', pickedChange: -1,     // apply tab
+};
+const PREVIEW_LIMIT = 600000;        // characters shown in the preview (copy is never cut)
+const LINE_H = 18;                   // px, must match the CSS line-height of <pre>
+
+/* =====================================================================================
+ * 3. Options: reading the controls into an options object and back
+ * ===================================================================================== */
+function parseTokens(v) {
+  const s = String(v || '').trim().toLowerCase().replace(/[, _]/g, '');
+  if (!s || ['0', 'none', 'nolimit', 'off'].includes(s)) return 0;
+  const m = /^(\d+(?:\.\d+)?)([km]?)$/.exec(s);
+  return m ? Math.trunc(parseFloat(m[1]) * { '': 1, k: 1000, m: 1000000 }[m[2]]) : NaN;
+}
+function formatTokens(n) { return !n ? 'No limit' : n % 1000000 === 0 ? n / 1000000 + 'M' : n % 1000 === 0 ? n / 1000 + 'k' : String(n); }
+const globs = (v) => v.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+
+/** Controls -> options object (the same keys the server and .tardis.json use). */
+function readOptions() {
+  const mode = $('#timeMode').value;
+  const ref = ($('#ref').value.trim().split(/\s+/)[0]) || '';
+  const budget = parseTokens($('#o_budget').value);
+  $('#o_budget').classList.toggle('invalid', Number.isNaN(budget));
+  return {
+    include_hidden: $('#o_hidden').checked, use_ignore: $('#o_ignore').checked,
+    include_locks: $('#o_locks').checked, include_secrets: $('#o_secrets').checked,
+    redact: $('#o_redact').checked, max_size_kb: Math.max(1, parseInt($('#o_max').value, 10) || 256),
+    include_globs: globs($('#o_only').value), exclude_globs: globs($('#o_exclude').value),
+    omit_globs: BOOT.defaults.omit_globs || [], condense_globs: BOOT.defaults.condense_globs || [],
+    fmt: $('#o_fmt').value, line_numbers: $('#o_numbers').checked, tree_only: $('#o_tree').checked,
+    budget: Number.isNaN(budget) ? 0 : budget, over: $('input[name=over]:checked').value,
+    since: mode === 'since' ? ref : '', at: mode === 'at' ? ref : '',
+    include_diff: $('#o_diff').checked, task: $('#task').value.trim(), reply_format: $('#o_reply').checked,
+  };
+}
+/** Options object -> controls. */
+function writeOptions(o) {
+  $('#o_hidden').checked = o.include_hidden; $('#o_ignore').checked = o.use_ignore;
+  $('#o_locks').checked = o.include_locks; $('#o_secrets').checked = o.include_secrets;
+  $('#o_redact').checked = o.redact; $('#o_max').value = o.max_size_kb;
+  $('#o_only').value = (o.include_globs || []).join(', '); $('#o_exclude').value = (o.exclude_globs || []).join(', ');
+  $('#o_fmt').value = o.fmt; $('#o_numbers').checked = o.line_numbers; $('#o_tree').checked = o.tree_only;
+  $('#o_budget').value = formatTokens(o.budget);
+  $$('input[name=over]').forEach((r) => { r.checked = r.value === (o.over || 'trim'); });
+  $('#timeMode').value = o.since ? 'since' : o.at ? 'at' : 'now';
+  $('#ref').value = o.since || o.at || '';
+  $('#o_diff').checked = o.include_diff; $('#task').value = o.task || ''; $('#o_reply').checked = o.reply_format;
+  syncTime();
+}
+/** Shows the reference box only when a time-travel mode is selected. */
+function syncTime() {
+  const mode = $('#timeMode').value;
+  $('#refRow').hidden = mode === 'now';
+  $('#diffLabel').hidden = mode !== 'since';
+}
+
+/* =====================================================================================
+ * 4. Scan and build
+ *    Requests never overlap: while one is running, the newest wish is remembered and
+ *    run afterwards ("scan" outranks "build" because a scan ends with a build).
+ * ===================================================================================== */
+const jobs = { running: false, want: null, fresh: false };
+async function request(kind, fresh = false) {
+  if (kind === 'scan' || jobs.want !== 'scan') jobs.want = kind;
+  if (fresh) jobs.fresh = true;
+  if (jobs.running) return;
+  jobs.running = true;
+  try {
+    while (jobs.want) {
+      const k = jobs.want, f = jobs.fresh;
+      jobs.want = null; jobs.fresh = false;
+      try { if (k === 'scan') await doScan(f); else await doBuild(); }
+      catch (e) { setBusy(false); status(e.message, true); }
+    }
+  } finally { jobs.running = false; setBusy(false); }
+}
+
+/** Opens a project (folder path or URL) and restores its last session. */
+function openProject(source) {
+  source = String(source || '').trim();
+  if (!source) return;
+  if (state.project) saveSession();
+  state.source = source;
+  $('#source').value = source;
+  state.sel = {}; state.part = 0; state.open = null; state.find = ''; $('#find').value = '';
+  request('scan', true);
+}
+
+async function doScan(fresh) {
+  if (!state.source) return;
+  setBusy(true, /^(https?:|git@|gh:|github\.com|gitlab\.com)/.test(state.source)
+    ? 'Vworp... vworp... fetching and scanning the repository.' : 'Vworp... vworp... scanning the project.');
+  const r = await api('scan', { source: state.source, options: fresh ? null : readOptions() });
+  state.project = r;
+  state.entries = r.entries;
+  if (fresh) writeOptions(r.options);
+  if (r.selection) state.sel = r.selection;
+  else { const rels = new Set(r.entries.map((e) => e.rel)); for (const k of Object.keys(state.sel)) if (!rels.has(k)) delete state.sel[k]; }
+  if (state.open === null) state.open = new Set(r.entries.map((e) => e.rel.split('/')).filter((p) => p.length > 1).map((p) => p[0]));
+  $('#refs').innerHTML = r.refs.map((x) => `<option value="${esc(x)}">`).join('');
+  $('#recents').innerHTML = r.recent.map((x) => `<option value="${esc(x)}">`).join('');
+  fillProfiles(r.profiles);
+  if (fresh && !r.remote) { $('#applyTo').value = r.root; }
+  $('#welcome').hidden = true;
+  document.title = `${r.name} - TARDIS`;
+  await doBuild();
+}
+
+async function doBuild() {
+  if (!state.project) return;
+  setBusy(true);
+  const r = await api('build', { options: readOptions(), selection: state.sel });
+  state.doc = r;
+  state.part = Math.min(state.part, r.parts.length - 1);
+  renderTree();
+  renderPreview();
+  renderFooter();
+}
+
+/** Remembers settings and ticks for this project (restored next time it is opened). */
+function saveSession() { if (state.project) api('session', { options: readOptions(), selection: state.sel }).catch(() => {}); }
+
+/* =====================================================================================
+ * 5. The file tree
+ * ===================================================================================== */
+const byRel = () => new Map(state.entries.map((e) => [e.rel, e]));
+const checkable = (e) => !e.skip || e.forceable;
+/** What the user wants for a file: explicit choice, else the default. */
+const intent = (e) => state.sel[e.rel] || (e.skip ? 'off' : e.def);
+
+function renderTree() {
+  const rows = state.doc ? state.doc.rows : {};
+  const find = state.find.toLowerCase();
+  const mk = (rel, name) => ({ rel, name, dirs: new Map(), files: [], tok: 0, can: 0, on: 0 });
+  const top = mk('', '');
+  let total = 0;
+  for (const e of state.entries) {
+    if (find && !e.rel.toLowerCase().includes(find)) continue;
+    const tok = (rows[e.rel] || {}).tok || 0;
+    const can = checkable(e) ? 1 : 0, on = can && intent(e) !== 'off' ? 1 : 0;
+    total += tok;
+    const parts = e.rel.split('/');
+    let node = top;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node.dirs.has(parts[i])) node.dirs.set(parts[i], mk(parts.slice(0, i + 1).join('/'), parts[i]));
+      node = node.dirs.get(parts[i]);
+      node.tok += tok; node.can += can; node.on += on;
+    }
+    node.files.push(e);
+  }
+  total = Math.max(1, total);
+  const shareCell = (tok) => {
+    if (!tok) return '<div class="share"></div>';
+    const pct = tok * 100 / total;
+    return `<div class="share"><u style="width:${Math.max(2, pct).toFixed(1)}%"></u>${pct >= 3 ? `<em>${pct.toFixed(0)}%</em>` : ''}</div>`;
+  };
+  const html = [];
+  const walk = (node, depth) => {
+    const kids = [...node.files.map((e) => ({ e, tok: (rows[e.rel] || {}).tok || 0 })), ...[...node.dirs.values()].map((d) => ({ d, tok: d.tok }))];
+    if (state.sort === 'tokens') kids.sort((a, b) => b.tok - a.tok);
+    const padL = `style="padding-left:${10 + depth * 16}px"`;
+    for (const k of kids) {
+      if (k.d) {
+        const d = k.d, isOpen = find || state.open.has(d.rel);
+        const box = d.can === 0 ? 'na' : d.on === d.can ? 'on' : d.on === 0 ? 'off' : 'part';
+        html.push(`<div class="trow dir" data-dir="${esc(d.rel)}" ${padL}><div class="name"><i data-caret>${isOpen ? '&#9662;' : '&#9656;'}</i>` +
+          `<b class="box ${box}" data-box></b><span>${esc(d.name)}/</span></div><div class="tok">${d.tok ? fmt(d.tok) : ''}</div>${shareCell(d.tok)}<div class="info"></div></div>`);
+        if (isOpen) walk(d, depth + 1);
+      } else {
+        const e = k.e, r = rows[e.rel] || {}, want = intent(e);
+        const box = !checkable(e) ? 'na' : want === 'full' ? 'on' : want === 'condensed' ? 'cond' : 'off';
+        let info = e.change || '', cls = '';
+        if (r.auto && r.mode === 'off') { info = 'trimmed to fit budget'; cls = 'budget off'; }
+        else if (r.auto) { info = 'condensed to fit budget'; cls = 'budget'; }
+        else if (r.mode === 'condensed') info = r.label || 'condensed';
+        else if (r.mode === 'off') { info = r.note || e.note; cls = 'off'; }
+        else if (r.note) info = r.note;
+        const tokText = r.tok ? fmt(r.tok) : r.pot ? `<span class="muted">(${fmt(r.pot)})</span>` : '';
+        html.push(`<div class="trow ${cls}${state.picked === e.rel ? ' sel' : ''}" data-file="${esc(e.rel)}" ${padL}><div class="name"><i></i>` +
+          `<b class="box ${box}" data-box></b><span title="${esc(e.rel)}">${esc(e.rel.slice(e.rel.lastIndexOf('/') + 1))}</span></div>` +
+          `<div class="tok">${tokText}</div>${shareCell(r.tok || 0)}<div class="info" title="${esc(info)}">${esc(info)}</div></div>`);
+      }
+    }
+  };
+  walk(top, 0);
+  $('#tree').innerHTML = html.join('') || '<div class="muted" style="padding:16px">No files match.</div>';
+  // token map: one coloured segment per top-level folder (root files count as one)
+  const segs = [...top.dirs.values()].map((d) => [d.name + '/', d.tok]);
+  segs.push(['(files in the root)', top.files.reduce((s, e) => s + ((rows[e.rel] || {}).tok || 0), 0)]);
+  $('#tokenMap').innerHTML = segs.filter((s) => s[1]).sort((a, b) => b[1] - a[1]).map(([name, tok], i) =>
+    `<span style="flex:${tok};background:hsl(${(210 + i * 47) % 360} 65% 55%)" data-seg="${esc(name)}" title="${esc(name)}  ~${fmt(tok)} tokens (${(tok * 100 / total).toFixed(0)}%)"></span>`).join('');
+}
+
+/** Stores a choice. mode null = "automatic" (the budget may then manage the file). */
+function choose(e, mode) { if (mode === null) delete state.sel[e.rel]; else state.sel[e.rel] = mode; }
+function filesUnder(dir) { return state.entries.filter((e) => e.rel.startsWith(dir + '/') && checkable(e)); }
+function changed() { renderTree(); debounce('build', 150, () => request('build')); debounce('session', 1500, saveSession); }
+
+function toggleFile(rel) {
+  const e = byRel().get(rel);
+  if (!e) return;
+  if (!checkable(e)) { toast(`${e.rel} can't be included as text (${e.note}).`); return; }
+  if (intent(e) !== 'off') choose(e, 'off'); else choose(e, e.skip ? 'full' : null);
+  changed();
+}
+function toggleDir(dir) {
+  const files = filesUnder(dir), normal = files.filter((e) => !e.skip);
+  if (!normal.length) { toast('Nothing in that folder is included by default - tick individual files to force them in.'); return; }
+  const turnOn = !normal.every((e) => intent(e) !== 'off');
+  // folders never force withheld files (secrets, huge files) in
+  for (const e of files) choose(e, turnOn || e.skip ? null : 'off');
+  changed();
+}
+function setAll(on) { for (const e of state.entries) if (checkable(e)) choose(e, on || e.skip ? null : 'off'); changed(); }
+
+/** Right-click menu for a file or folder. */
+function showMenu(x, y, target) {
+  const rels = target.file ? [target.file] : filesUnder(target.dir).map((e) => e.rel);
+  const setMode = (mode) => { const m = byRel(); for (const r of rels) { const e = m.get(r); if (e && checkable(e)) choose(e, mode); } changed(); };
+  const imports = async (action) => {
+    try { const r = await api('imports', { action, rels, selection: state.sel }); state.sel = r.selection; changed(); status(r.message); }
+    catch (e) { toast(e.message, 'error'); }
+  };
+  const items = [
+    ['Full contents', () => setMode('full')], ['Condensed (outline / sample)', () => setMode('condensed')],
+    ['Leave out', () => setMode('off')], ['Automatic (let TARDIS decide)', () => setMode(null)], null,
+    ['Focus: only this + everything it imports', () => imports('focus')],
+    ['Add everything this imports', () => imports('add')], ['Add the files that import this', () => imports('importers')],
+  ];
+  const menu = $('#menu');
+  menu.innerHTML = '';
+  for (const it of items) {
+    if (!it) { menu.append(document.createElement('hr')); continue; }
+    const d = document.createElement('div');
+    d.textContent = it[0];
+    d.onclick = () => { menu.hidden = true; it[1](); };
+    menu.append(d);
+  }
+  menu.hidden = false;
+  menu.style.left = Math.min(x, innerWidth - 280) + 'px';
+  menu.style.top = Math.min(y, innerHeight - menu.offsetHeight - 8) + 'px';
+}
+
+/* =====================================================================================
+ * 6. Preview and footer
+ * ===================================================================================== */
+function renderPreview() {
+  const d = state.doc, n = d.parts.length;
+  const sel = $('#part');
+  sel.hidden = n < 2;
+  if (n > 1) {
+    sel.innerHTML = d.parts.map((_, i) => `<option value="${i}">Part ${i + 1} of ${n}  (~${fmt(d.partTokens[i])} tokens)</option>`).join('');
+    sel.value = String(state.part);
+  }
+  const text = d.parts[state.part];
+  const wrap = $('#previewScroll'), top = wrap.scrollTop;
+  $('#preview').textContent = text.length > PREVIEW_LIMIT
+    ? text.slice(0, PREVIEW_LIMIT) + `\n\n[Preview stops here. The full text is ${fmt(text.length)} characters and is copied / downloaded in full.]\n`
+    : text;
+  $('#hit').hidden = true;
+  wrap.scrollTop = top;
+  $('#copy').textContent = n > 1 ? `Copy part ${state.part + 1} of ${n}` : 'Copy to clipboard';
+}
+
+/** Scrolls the preview to a file's section and flashes its heading. */
+function jumpTo(rel) {
+  const a = state.doc && state.doc.anchors[rel];
+  if (!a) return;
+  if (a[0] !== state.part) { state.part = a[0]; renderPreview(); }
+  const idx = state.doc.parts[state.part].indexOf(a[1]);
+  if (idx < 0 || idx > PREVIEW_LIMIT) { status('That file is past the end of the preview - the full document still contains it.'); return; }
+  const line = state.doc.parts[state.part].slice(0, idx).split('\n').length - 1;
+  const hit = $('#hit');
+  hit.style.top = (10 + line * LINE_H) + 'px';
+  hit.hidden = false;
+  $('#previewScroll').scrollTo({ top: Math.max(0, (line - 2) * LINE_H), behavior: 'smooth' });
+}
+
+function renderFooter() {
+  const d = state.doc, p = state.project;
+  const limit = d.budget || 200000;
+  $('#meter div').style.width = Math.min(100, d.tokens * 100 / limit) + '%';
+  $('#meter').classList.toggle('over', d.overBudget);
+  const pct = d.tokens * 100 / 200000;
+  const size = d.budget ? `~${fmt(d.tokens)} / ${fmt(d.budget)} tokens` : `~${fmt(d.tokens)} tokens (${pct < 1 ? 'under 1' : pct.toFixed(0)}% of a 200k context)`;
+  const files = d.filesFull + d.filesCondensed;
+  $('#stats').textContent = `${size}   \u00b7   ${plural(files, 'file')}${d.filesCondensed ? ` (${fmt(d.filesCondensed)} condensed)` : ''}   \u00b7   ${plural(d.lines, 'line')}`;
+  $('#stats').title = 'Token counts: ' + d.counter;
+  if (d.secrets.length && !d.redacted) {
+    const [rel, line, kind] = d.secrets[0];
+    status(`Spoilers! Possible ${kind} in ${rel}:${line}${d.secrets.length > 1 ? ` (+${d.secrets.length - 1} more)` : ''} - tick "Redact secrets" or check before you share.`, true);
+  } else if (d.overBudget) status('Still over budget: everything TARDIS may trim is gone. Untick more, raise the budget, or choose "Split into parts".', true);
+  else if (!state.entries.length) status('Hmm. Nothing to pack here - check the folder and the filters.', true);
+  else {
+    let msg = `Fantastic! ${plural(files, 'file')} folded into ${d.parts.length > 1 ? d.parts.length + ' parts' : 'one document'}.`;
+    if (d.trimmed || d.squeezed) msg += ` To fit the budget: ${fmt(d.squeezed)} condensed, ${fmt(d.trimmed)} left out (orange rows).`;
+    if (d.redacted) msg += ` ${plural(d.redacted, 'secret')} redacted.`;
+    if (p.hiddenSkipped) msg += ` ${plural(p.hiddenSkipped, 'hidden item')} stayed behind the perception filter.`;
+    status(msg);
+  }
+}
+
+/* =====================================================================================
+ * 7. Copy and download
+ * ===================================================================================== */
+async function copyDoc() {
+  clearTimeout(timers.build);
+  if (!state.project) { toast('Pick a project folder first.'); return; }
+  await request('build');                       // make sure the document is current
+  const d = state.doc, n = d.parts.length, k = state.part;
+  if (!await copyText(d.parts[k])) { toast('The browser refused clipboard access - use Download instead.', 'error'); return; }
+  if (n === 1) { toast(`Geronimo! ~${fmt(d.tokens)} tokens copied.`); status("Copied. Paste it into the chat - then bring the AI's reply to tab 2."); }
+  else if (k + 1 < n) { state.part = k + 1; renderPreview(); toast(`Part ${k + 1} of ${n} copied.`); status(`Part ${k + 1} of ${n} copied. Paste it, then click again for part ${k + 2}.`); }
+  else { state.part = 0; renderPreview(); toast(`Part ${n} of ${n} copied - that was the last one.`); }
+  saveSession();
+}
+function downloadDoc() {
+  if (!state.doc) { toast('Pick a project folder first.'); return; }
+  const d = state.doc, base = (state.project.name.replace(/[^\w.-]+/g, '_') || 'project') + '.tardis';
+  d.parts.forEach((text, i) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    a.download = d.parts.length > 1 ? `${base}.part${i + 1}${d.ext}` : base + d.ext;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+  status('Molto bene! Saved to your downloads folder.');
+}
+
+/* =====================================================================================
+ * 8. Profiles and task templates
+ * ===================================================================================== */
+function fillProfiles(names) {
+  const cur = $('#profile').value;
+  $('#profile').innerHTML = '<option value="">(last session)</option>' + names.map((n) => `<option>${esc(n)}</option>`).join('');
+  if (names.includes(cur)) $('#profile').value = cur;
+}
+async function profileAction(action, name) {
+  try {
+    const r = await api('profile', { action, name, options: readOptions(), selection: state.sel });
+    fillProfiles(r.profiles);
+    if (action === 'load') { writeOptions(r.options); state.sel = r.selection; request('scan'); status(`Profile "${name}" loaded.`); }
+    if (action === 'save') { $('#profile').value = name; status(`Profile "${name}" saved in .tardis.json (commit it to share it with your team).`); }
+    if (action === 'delete') status(`Profile "${name}" deleted.`);
+  } catch (e) { toast(e.message, 'error'); }
+}
+function fillTemplates(templates) {
+  BOOT.templates = templates;
+  $('#template').innerHTML = '<option value="">(no task - just the snapshot)</option>' +
+    Object.keys(templates).map((n) => `<option>${esc(n)}</option>`).join('');
+}
+
+/* =====================================================================================
+ * 9. Folder picker (browsers cannot hand a page a folder path, so TARDIS has its own)
+ * ===================================================================================== */
+const picker = { path: '', done: null };
+async function pickFolder(start) {
+  $('#modal').hidden = false;
+  await pickGo(start || BOOT.home);
+  return new Promise((resolve) => { picker.done = resolve; });
+}
+async function pickGo(p) {
+  try {
+    const r = await api('browse', { path: p });
+    picker.path = r.path; picker.parent = r.parent;
+    $('#pickPath').value = r.path;
+    $('#pickInfo').textContent = r.isRepo ? 'This folder is a git repository.' : '';
+    const list = $('#pickList');
+    list.innerHTML = '';
+    const add = (label, target, repo) => {
+      const d = document.createElement('div');
+      d.className = 'item';
+      d.innerHTML = `<span class="grow">${esc(label)}</span>${repo ? '<span class="badge">git</span>' : ''}`;
+      d.onclick = () => pickGo(target);
+      list.append(d);
+    };
+    if (!r.parent) r.roots.filter((x) => x !== r.path).forEach((x) => add(x, x, false));
+    r.dirs.forEach((d) => add(d.name + r.sep, r.path.replace(/[\\/]+$/, '') + r.sep + d.name, d.repo));
+    if (!r.dirs.length) list.innerHTML += '<div class="muted" style="padding:14px">No sub-folders here.</div>';
+  } catch (e) { toast(e.message, 'error'); }
+}
+function pickClose(value) { $('#modal').hidden = true; if (picker.done) { picker.done(value); picker.done = null; } }
+
+/* =====================================================================================
+ * 10. The Apply tab (return trip)
+ * ===================================================================================== */
+const STATUS = { new: 'New file', modified: 'Modified', delete: 'Delete', unchanged: 'No change', problem: "Can't apply" };
+const usable = (p) => ['new', 'modified', 'delete'].includes(p.status);
+
+async function analyze() {
+  const text = $('#reply').value, to = $('#applyTo').value.trim();
+  state.planned = []; state.ticks = {}; state.fixup = ''; state.pickedChange = -1;
+  if (!text.trim() || !to) { renderChanges(null); return; }
+  try {
+    const r = await api('analyze', { text, to });
+    state.planned = r.planned;
+    state.fixup = r.fixup;
+    r.planned.forEach((p, i) => { state.ticks[i] = usable(p) && p.ok; });
+    state.pickedChange = r.planned.findIndex(usable);
+    renderChanges(r.info);
+  } catch (e) { status(e.message, true); }
+}
+function renderChanges(info) {
+  const rows = state.planned.map((p, i) => {
+    const box = !usable(p) ? 'na' : state.ticks[i] ? 'on' : 'off';
+    const flagged = p.notes.length && (!p.ok || p.status === 'problem');
+    return `<div class="crow${p.status === 'unchanged' ? ' dim' : ''}${i === state.pickedChange ? ' sel' : ''}" data-i="${i}">` +
+      `<b class="box ${box}" data-box></b><span class="p" title="${esc(p.path)}">${esc(p.path)}</span>` +
+      `<span class="st-${p.status}">${STATUS[p.status] || p.status}</span><span class="muted">${p.added || p.removed ? `+${p.added} \u2212${p.removed}` : ''}</span>` +
+      (p.notes.length ? `<span class="note" style="${flagged ? '' : 'color:var(--muted)'}">${esc(p.notes.join('; '))}</span>` : '') + '</div>';
+  });
+  $('#changes').innerHTML = rows.join('') || '<div class="muted" style="padding:16px">Paste a reply above and the files it changes appear here.</div>';
+  const n = Object.values(state.ticks).filter(Boolean).length;
+  $('#apply').disabled = !n;
+  $('#apply').textContent = n ? `Apply ${plural(n, 'change')}` : 'Apply changes';
+  $('#fixup').hidden = !state.fixup;
+  const bits = [];
+  if (state.planned.length) bits.push(`${plural(state.planned.length, 'file')} found`);
+  const flagged = state.planned.filter((p, i) => p.notes.length && !state.ticks[i] && ['new', 'modified', 'problem'].includes(p.status)).length;
+  if (flagged) bits.push(`${flagged} flagged - read the notes`);
+  if (info) {
+    if (info.skipped) bits.push(`${info.skipped} code block(s) without a file name ignored`);
+    if (info.unsupported.length) bits.push('diff-style blocks are not supported');
+    bits.push(...info.problems.slice(0, 2));
+  }
+  $('#applySummary').textContent = bits.join('  \u00b7  ');
+  showDiff();
+}
+function showDiff() {
+  const p = state.planned[state.pickedChange], el = $('#diff');
+  el.innerHTML = '';
+  if (!p) return;
+  const frag = document.createDocumentFragment();
+  const line = (text, cls) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; frag.append(s); };
+  p.notes.forEach((nt) => line('NOTE: ' + nt, 'n'));
+  if (p.status === 'unchanged') line('(identical to the file you already have)', '');
+  for (const ln of p.diff) line(ln, ln.startsWith('@@') || ln.startsWith('+++') || ln.startsWith('---') ? 'h' : ln[0] === '+' ? 'a' : ln[0] === '-' ? 'd' : '');
+  if (p.clipped) line(`[... ${fmt(p.clipped)} more diff lines not shown]`, 'n');
+  el.append(frag);
+}
+async function applyNow() {
+  const paths = state.planned.filter((p, i) => state.ticks[i]).map((p) => p.path);
+  try {
+    const r = await api('apply', { text: $('#reply').value, to: $('#applyTo').value.trim(), paths });
+    toast(`Fantastic! ${plural(r.done, 'change')} applied.`);
+    status(`${plural(r.done, 'change')} applied. Originals are safe in .tardis/backups/${r.backup} - "Undo last apply" puts them back.`);
+    await analyze();
+    if (state.project && state.project.root === $('#applyTo').value.trim()) request('scan');
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function undoNow() {
+  try {
+    const r = await api('undo', { to: $('#applyTo').value.trim() });
+    if (!r.name) { toast('Nothing to undo in that folder.'); return; }
+    toast(`Timey-wimey! ${plural(r.n, 'file')} restored.`);
+    await analyze();
+    if (state.project && state.project.root === $('#applyTo').value.trim()) request('scan');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/* =====================================================================================
+ * 11. Wiring: connect the controls to the functions above
+ * ===================================================================================== */
+function showTab(name) {
+  $$('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
+  $('#tab-pack').hidden = name !== 'pack';
+  $('#tab-apply').hidden = name !== 'apply';
+}
+$$('nav button').forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
+
+// --- project bar
+$('#source').addEventListener('keydown', (e) => { if (e.key === 'Enter') openProject($('#source').value); });
+$('#source').addEventListener('change', () => { if ($('#source').value.trim() && $('#source').value.trim() !== state.source) openProject($('#source').value); });
+const browse = async () => { const p = await pickFolder(state.project && !state.project.remote ? state.project.root : BOOT.home); if (p) openProject(p); };
+$('#browse').onclick = browse;
+$('#welcomeBrowse').onclick = browse;
+$('#rescan').onclick = () => (state.source ? request('scan') : openProject($('#source').value));
+$('#profile').onchange = () => { if ($('#profile').value) profileAction('load', $('#profile').value); };
+$('#profileSave').onclick = () => {
+  if (!state.project) return;
+  const name = (prompt('Save the current settings and ticks as a profile named:', $('#profile').value) || '').trim();
+  if (name) profileAction('save', name);
+};
+$('#profileDelete').onclick = () => { const n = $('#profile').value; if (n && confirm(`Delete the profile "${n}"?`)) profileAction('delete', n); };
+
+// --- settings: controls marked data-scan need a rescan, the rest only a rebuild
+$$('[data-opt]').forEach((el) => {
+  const run = () => { debounce('session', 1500, saveSession); request(el.hasAttribute('data-scan') ? 'scan' : 'build'); };
+  el.addEventListener('change', run);
+  if (el.type === 'text') el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
+});
+$('#timeMode').onchange = () => {
+  syncTime();
+  if ($('#timeMode').value !== 'now' && !$('#ref').value.trim()) $('#ref').value = (state.project && state.project.refs[0]) || 'HEAD';
+  request('scan');
+};
+$('#ref').addEventListener('change', () => request('scan'));
+$('#ref').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#ref').blur(); });
+$('#task').addEventListener('input', () => debounce('build', 500, () => request('build')));
+$('#template').onchange = () => { $('#task').value = BOOT.templates[$('#template').value] || ''; request('build'); };
+$('#templateSave').onclick = async () => {
+  const text = $('#task').value.trim();
+  if (!text) { toast('Type a task first, then save it as a template.'); return; }
+  const name = (prompt('Name for this task template:') || '').trim();
+  if (!name) return;
+  try { const r = await api('template', { name, text }); fillTemplates(r.templates); $('#template').value = name; toast(`Template "${name}" saved.`); }
+  catch (e) { toast(e.message, 'error'); }
+};
+
+// --- tree: one delegated listener for ticks, carets, selection and the context menu
+$('#tree').addEventListener('click', (ev) => {
+  const row = ev.target.closest('.trow');
+  if (!row) return;
+  const dir = row.dataset.dir, file = row.dataset.file;
+  if (ev.target.hasAttribute('data-box')) { if (dir !== undefined) toggleDir(dir); else toggleFile(file); return; }
+  if (dir !== undefined) { if (state.open.has(dir)) state.open.delete(dir); else state.open.add(dir); renderTree(); return; }
+  state.picked = file;
+  $$('#tree .trow.sel').forEach((r) => r.classList.remove('sel'));
+  row.classList.add('sel');
+  jumpTo(file);
+});
+$('#tree').addEventListener('dblclick', (ev) => { const row = ev.target.closest('.trow[data-file]'); if (row && !ev.target.hasAttribute('data-box')) toggleFile(row.dataset.file); });
+$('#tree').addEventListener('contextmenu', (ev) => {
+  const row = ev.target.closest('.trow');
+  if (!row) return;
+  ev.preventDefault();
+  showMenu(ev.clientX, ev.clientY, row.dataset.dir !== undefined ? { dir: row.dataset.dir } : { file: row.dataset.file });
+});
+document.addEventListener('click', (ev) => { if (!ev.target.closest('#menu')) $('#menu').hidden = true; });
+$('#find').addEventListener('input', () => debounce('find', 150, () => { state.find = $('#find').value.trim(); renderTree(); }));
+$('#tokenMap').addEventListener('click', (ev) => {
+  const seg = ev.target.dataset.seg;
+  if (!seg) return;
+  const v = seg.endsWith('/') ? seg : '';
+  $('#find').value = state.find === v.toLowerCase() ? '' : v;       // click again to clear
+  state.find = $('#find').value;
+  renderTree();
+});
+$$('#treeHead [data-sort]').forEach((h) => { h.onclick = () => { state.sort = h.dataset.sort; renderTree(); }; });
+$$('#treePane [data-act]').forEach((b) => {
+  b.onclick = () => {
+    const act = b.dataset.act;
+    if (act === 'all') setAll(true);
+    else if (act === 'none') setAll(false);
+    else {
+      state.open = new Set();
+      if (act === 'expand') for (const e of state.entries) { const p = e.rel.split('/'); for (let i = 1; i < p.length; i++) state.open.add(p.slice(0, i).join('/')); }
+      renderTree();
+    }
+  };
+});
+
+// --- preview, copy, download
+$('#part').onchange = () => { state.part = Number($('#part').value); renderPreview(); };
+$('#copy').onclick = copyDoc;
+$('#save').onclick = downloadDoc;
+
+// --- draggable divider between the tree and the preview
+$('#split').addEventListener('pointerdown', (ev) => {
+  const pane = $('#treePane'), startX = ev.clientX, startW = pane.offsetWidth;
+  const move = (e) => { pane.style.width = Math.max(280, startW + e.clientX - startX) + 'px'; };
+  const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); localStorage.setItem('tardis.treeWidth', pane.style.width); };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+});
+if (localStorage.getItem('tardis.treeWidth')) $('#treePane').style.width = localStorage.getItem('tardis.treeWidth');
+
+// --- folder picker
+$('#pickClose').onclick = () => pickClose(null);
+$('#pickChoose').onclick = () => pickClose(picker.path);
+$('#pickUp').onclick = () => { if (picker.parent) pickGo(picker.parent); };
+$('#pickHome').onclick = () => pickGo(BOOT.home);
+$('#pickPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') pickGo($('#pickPath').value); });
+$('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') pickClose(null); });
+
+// --- apply tab
+$('#reply').addEventListener('input', () => debounce('analyze', 400, analyze));
+$('#applyTo').addEventListener('change', analyze);
+$('#applyBrowse').onclick = async () => { const p = await pickFolder($('#applyTo').value || BOOT.home); if (p) { $('#applyTo').value = p; analyze(); } };
+$('#paste').onclick = async () => {
+  try { const t = await navigator.clipboard.readText(); if (!t) throw new Error('empty'); $('#reply').value = t; analyze(); }
+  catch { $('#reply').focus(); toast('Your browser did not allow reading the clipboard - click in the box and press Ctrl/Cmd + V.'); }
+};
+$('#clear').onclick = () => { $('#reply').value = ''; analyze(); };
+$('#changes').addEventListener('click', (ev) => {
+  const row = ev.target.closest('.crow');
+  if (!row) return;
+  const i = Number(row.dataset.i);
+  if (ev.target.hasAttribute('data-box') && usable(state.planned[i])) state.ticks[i] = !state.ticks[i];
+  state.pickedChange = i;
+  renderChanges(null);
+});
+$('#apply').onclick = applyNow;
+$('#undo').onclick = undoNow;
+$('#fixup').onclick = async () => { if (await copyText(state.fixup)) toast('Fix-up request copied - paste it to the AI as your next message.'); };
+
+// --- theme, live mode, keyboard, lifecycle
+const themes = ['auto', 'light', 'dark'];
+function setTheme(t) { document.documentElement.dataset.theme = t; $('#theme').textContent = 'Theme: ' + t; localStorage.setItem('tardis.theme', t); }
+$('#theme').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % 3]);
+setTheme(localStorage.getItem('tardis.theme') || 'auto');
+
+setInterval(async () => {                      // Live mode: rescan when the project changed on disk
+  if (!$('#live').checked || !state.project || jobs.running || document.hidden) return;
+  try { if ((await api('poll')).dirty) { toast('Files changed - rescanning.'); request('scan'); } } catch { /* server gone */ }
+}, 2000);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $('#menu').hidden = true; if (!$('#modal').hidden) pickClose(null); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); if ($('#tab-pack').hidden) { if (!$('#apply').disabled) applyNow(); } else copyDoc(); }
+  if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); $('#find').focus(); }
+});
+// Closing the tab tells the server to exit (it waits a moment in case this is a reload).
+addEventListener('pagehide', () => { saveSession(); navigator.sendBeacon('/api/bye?t=' + BOOT.token, '{}'); });
+
+// --- first paint
+fillTemplates(BOOT.templates);
+writeOptions(BOOT.defaults);
+$('#recents').innerHTML = BOOT.recent.map((x) => `<option value="${esc(x)}">`).join('');
+$('#welcomeRecent').innerHTML = BOOT.recent.length
+  ? '<b>Recent projects</b>' + BOOT.recent.map((r) => `<a data-recent="${esc(r)}">${esc(r)}</a>`).join('') : '';
+$('#welcomeRecent').addEventListener('click', (e) => { if (e.target.dataset.recent) openProject(e.target.dataset.recent); });
+renderChanges(null);
+if (BOOT.initial) openProject(BOOT.initial);
+</script>
+</body>
+</html>

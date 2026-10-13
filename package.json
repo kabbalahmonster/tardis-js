@@ -1,0 +1,14 @@
+{
+    "name": "tardis-snapshot",
+    "version": "3.0.0",
+    "description": "TARDIS - pack a whole project into one pasteable document, and apply AI replies back.",
+    "license": "MIT",
+    "bin": { "tardis": "tardis.js" },
+    "main": "tardis.js",
+    "files": ["tardis.js", "ui.html", "README.md"],
+    "engines": { "node": ">=18" },
+    "scripts": {
+      "start": "node tardis.js",
+      "test": "node --test"
+    }
+  }
